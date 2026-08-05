@@ -1,30 +1,3 @@
-# --- logging bootstrap (auto-added) ---
-import atexit
-from scripts.logger import redirect_std_to_logger, save_plot, setup_logger
-
-LOG, RUN_PATHS = setup_logger(__file__)
-_redirect_ctx = redirect_std_to_logger(LOG)
-_redirect_ctx.__enter__()
-atexit.register(_redirect_ctx.__exit__, None, None, None)
-
-# Auto-save matplotlib figures on plt.show()
-try:
-    import matplotlib.pyplot as plt  # type: ignore
-
-    _orig_show = plt.show
-
-    def _show_and_save(*args, **kwargs):
-        try:
-            save_plot(plt, LOG, RUN_PATHS)
-        except Exception:
-            pass
-        return _orig_show(*args, **kwargs)
-
-    plt.show = _show_and_save  # type: ignore[assignment]
-except Exception:
-    pass
-# --- end logging bootstrap ---
-
 ### 論文馬達研究
 ### 第一步 資料前處理
 ### 存檔
@@ -33,6 +6,7 @@ except Exception:
 
 # 匯入所需的函式庫
 import os
+import numpy as np
 import pandas as pd
 from natsort import natsorted
 import matplotlib.pyplot as plt
@@ -41,19 +15,23 @@ warnings.filterwarnings("ignore")
 
 # 設定根目錄
 rootDir = os.getcwd()
-dataDir = os.path.join(rootDir, 'data')
-stepDir = os.path.join(dataDir, 'Step-2')
 # 設定儲存數據的目錄
-save_base_dir = os.path.join(stepDir, 'csv')
+save_base_dir = os.path.join(rootDir, '階段2', 'csv')
 
 # 設定數據目錄
 motor_types = ['T2']
-screws_config = [8, 7, 6, 5, 4, 3, 2, 1, '3_14', '4_146']
+screws_config = [8, 7, 6, 5, 4, 3, 2]
+# screws_config = [8]
 
 rawDataDirectories = {
     motor: {
-        screws: os.path.join(stepDir, motor, '11000rpm', f'{screws}screws')
-        for screws in screws_config
+        **{
+            screws: os.path.join(rootDir, '階段2', motor, '11000rpm', f'{screws}screws')
+            for screws in screws_config
+        },
+        '1': os.path.join(rootDir, '階段2', motor, '11000rpm', '1screw'),
+        '3_14': os.path.join(rootDir, '階段2', motor, '11000rpm', '3_14screws'),
+        '4_146': os.path.join(rootDir, '階段2', motor, '11000rpm', '4_146screws'),
     }
     for motor in motor_types
 }
@@ -115,7 +93,7 @@ def slice_and_save(all_data, save_directory, motor, screws):
 
         # 切割數據並水平合併
         sliced_data = pd.DataFrame()
-        for i in range(0, len(raw_data) - 10000 + 1, 10000):
+        for i in range(0, len(raw_data), 10000):
             sliced_chunk = raw_data.iloc[i:i+10000].reset_index(drop=True)
             sliced_data = pd.concat([sliced_data, sliced_chunk], axis=1)
 

@@ -1,30 +1,3 @@
-# --- logging bootstrap (auto-added) ---
-import atexit
-from scripts.logger import redirect_std_to_logger, save_plot, setup_logger
-
-LOG, RUN_PATHS = setup_logger(__file__)
-_redirect_ctx = redirect_std_to_logger(LOG)
-_redirect_ctx.__enter__()
-atexit.register(_redirect_ctx.__exit__, None, None, None)
-
-# Auto-save matplotlib figures on plt.show()
-try:
-    import matplotlib.pyplot as plt  # type: ignore
-
-    _orig_show = plt.show
-
-    def _show_and_save(*args, **kwargs):
-        try:
-            save_plot(plt, LOG, RUN_PATHS)
-        except Exception:
-            pass
-        return _orig_show(*args, **kwargs)
-
-    plt.show = _show_and_save  # type: ignore[assignment]
-except Exception:
-    pass
-# --- end logging bootstrap ---
-
 ### 論文馬達研究
 ### 第二步 特徵提取
 ### 11000rpm
@@ -35,6 +8,7 @@ import pandas as pd
 from scipy.fftpack import fft
 import matplotlib.pyplot as plt
 from scipy.stats import kurtosis, skew
+from natsort import natsorted
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -43,10 +17,8 @@ warnings.filterwarnings("ignore")
 # 設定參數與路徑
 # ========================
 rootDir = os.getcwd()
-dataDir = os.path.join(rootDir, 'data')
-stepDir = os.path.join(dataDir, 'Step-1')
-csvDirectory = os.path.join(stepDir, 'csv')
-myfeatureDirectory = os.path.join(stepDir, 'myfeature')
+csvDirectory = os.path.join(rootDir, '階段1', 'csv')
+myfeatureDirectory = os.path.join(rootDir, '階段1', 'myfeature')
 
 rawdata = 10000  # 每個檔案的點數
 rawdata2 = rawdata // 2
@@ -108,7 +80,7 @@ feature_name = [
 # 定義函式
 # ========================
 
-def fourier_transform(data, group_label, rpm, screws, feature_type='Vibration_X'):
+def fourier_transform(data, lenFeature, group_label, rpm, screws, feature_type='Vibration_X'):
     """
     對原始信號進行傅立葉變換並繪製頻譜圖，並在圖表上標示 rpm 和 screws 信息
     """
@@ -118,8 +90,7 @@ def fourier_transform(data, group_label, rpm, screws, feature_type='Vibration_X'
     myfft2 = myfft[:rawdata2, :]  # 只保留前半部分頻譜數據
 
     plt.figure(figsize=(10, 6))
-    freq_local = np.linspace(0, rawdata2 - 1, rawdata2) * (Fs / rawdata)
-    plt.plot(freq_local, myfft2[:, 0])  # 繪製第一個特徵的頻譜圖
+    plt.plot(freq, myfft2[:, 0])  # 繪製第一個特徵的頻譜圖
     plt.ylabel('Amplitude')
     plt.xlabel('Hz')
     
@@ -149,9 +120,9 @@ def extract_statistical_features(df, num_features):
         features[i, 2] = kurtosis(data, fisher=False)  # kurtosis
         features[i, 3] = np.std(data)               # std
         features[i, 4] = skew(data)                  # skewness
-        features[i, 5] = data.max() - data.min()                # peak2peak
+        features[i, 5] = np.ptp(data)                # peak2peak
         features[i, 6] = np.abs(data.max() / np.sqrt(np.mean(data**2)))  # crest_indicator
-        features[i, 7] = np.abs(data.max()) / (np.mean(np.sqrt(np.abs(data))) ** 2)  # clearance_indicator
+        features[i, 7] = np.abs(data.max() / np.mean(np.sqrt(np.abs(data)**2)))  # clearance_indicator
         features[i, 8] = np.sqrt(np.mean(data**2)) / np.mean(np.abs(data))  # shape_indicator
         features[i, 9] = np.abs(data.max() / np.mean(np.abs(data)))        # impulse_indicator
         features[i, 10] = data.max()              # Max
@@ -186,24 +157,6 @@ def drop_missing_values(df):
     """
     return df.dropna()
     
-def drop_feature_outliers(df, scale=1.5):
-    """
-    以 IQR 移除特徵層的離群值。
-
-    任一維特徵落在 [Q1 - scale*IQR, Q3 + scale*IQR] 之外，整列捨棄。
-    Step4/5 的 HDBSCAN 叢集與馬氏距離對離群值敏感，因此在原始特徵之外
-    另存一份乾淨版本供其使用；Step3/Step6 的訓練仍讀未過濾的版本。
-
-    scale 取 1.5（Step1 的訊號層過濾用 3.0），與既有 _clean.csv 一致。
-    """
-    Q1 = df.quantile(0.25)
-    Q3 = df.quantile(0.75)
-    IQR = Q3 - Q1
-    lower = Q1 - scale * IQR
-    upper = Q3 + scale * IQR
-    return df[((df >= lower) & (df <= upper)).all(axis=1)]
-
-
 def align_rows(*arrays):
     """
     將所有輸入陣列的行數對齊，以最小行數為基準裁剪。
@@ -223,7 +176,7 @@ def extract_fft_features(Hfeat, base_freq, d_freqs, num_fft_features=10):
         freq_range = ((target_freq - d_freq), (target_freq + d_freq))  # 保留實際頻率範圍
         freq_indices = np.where((freq >= freq_range[0]) & (freq <= freq_range[1]))[0]
         if len(freq_indices) == 0:
-            fft_max = np.zeros(Hfeat.shape[1])
+            fft_max = 0
         else:
             fft_max = Hfeat[freq_indices, :].max(axis=0)
         fft_features.append(fft_max)
@@ -251,9 +204,9 @@ def process_group(group_label, screws):
         VibrationDataset_Y = df_y.values
         VibrationDataset_Z = df_z.values
 
-        Hfeat_xVibration = fourier_transform(VibrationDataset_X, group_label, rpm, screws, feature_type='Vibration_X')
-        Hfeat_yVibration = fourier_transform(VibrationDataset_Y, group_label, rpm, screws, feature_type='Vibration_Y')
-        Hfeat_zVibration = fourier_transform(VibrationDataset_Z, group_label, rpm, screws, feature_type='Vibration_Z')
+        Hfeat_xVibration = fourier_transform(VibrationDataset_X, df_x.shape[1], group_label, rpm, screws, feature_type='Vibration_X')
+        Hfeat_yVibration = fourier_transform(VibrationDataset_Y, df_y.shape[1], group_label, rpm, screws, feature_type='Vibration_Y')
+        Hfeat_zVibration = fourier_transform(VibrationDataset_Z, df_z.shape[1], group_label, rpm, screws, feature_type='Vibration_Z')
 
         # 提取統計特徵
         feature_Current = extract_statistical_features(df_current, 15)
@@ -291,13 +244,6 @@ def process_group(group_label, screws):
         output_csv = os.path.join(group_feature_dir, f'{group_label}_Group_feature_data.csv')
         feature_data.to_csv(output_csv, index=False)
         print(f"特徵數據已保存為 CSV 文件: {output_csv}")
-
-        # 儲存去除離群值後的特徵數據（Step4/5 使用）
-        clean_data = drop_feature_outliers(feature_data)
-        clean_csv = os.path.join(group_feature_dir, f'{group_label}_Group_feature_data_clean.csv')
-        clean_data.to_csv(clean_csv, index=False)
-        print(f"乾淨特徵數據已保存為 CSV 文件: {clean_csv} "
-              f"({len(feature_data)} -> {len(clean_data)} 列)")
 
     except FileNotFoundError:
         print(f"找不到群組 {group_label} 在 {screws} 的資料檔案，無法讀取檔案!!!")
